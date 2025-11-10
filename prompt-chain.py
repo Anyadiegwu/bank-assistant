@@ -32,7 +32,7 @@ class AiAssistant:
             print(f"Error: {e}")
             return None
 
-# Initialize AI Assistant
+
 gemini_api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
 gemini_api_key = os.getenv('GEMINI_API_KEY')
 gemi = AiAssistant(gemini_api_url, gemini_api_key, "gemini-2.5-flash-lite")
@@ -48,7 +48,7 @@ categories = """
 - General Information
 """
 
-# Store sessions (in production, use Redis or database)
+
 sessions = {}
 
 @app.route('/')
@@ -132,7 +132,7 @@ def run_prompt_chain():
     user_input = data.get('message', '')
     session_id = data.get('session_id', 'default')
     
-    # Initialize session if new
+  
     if session_id not in sessions:
         sessions[session_id] = {
             'context_data': {},
@@ -142,7 +142,7 @@ def run_prompt_chain():
     
     session = sessions[session_id]
     
-    # Extract details
+    
     prompt1 = f"""
     You are a precise requirements-extraction assistant for a bank.
     Extract key information from the user's message as a JSON object.
@@ -165,7 +165,7 @@ def run_prompt_chain():
         except:
             pass
     
-    # Classify category
+ 
     if session['predicted_category'] is None:
         prompt2 = f"""
         Classify this banking request into one category:
@@ -176,7 +176,7 @@ def run_prompt_chain():
         """
         session['predicted_category'] = gemi.call_with_prompt(prompt2).strip()
     
-    # Controller
+ 
     prompt3 = f"""
     You are a banking conversation controller.
     
