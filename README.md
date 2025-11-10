@@ -1,4 +1,4 @@
-🏦 Bank AI Assistant
+# 🏦 Bank AI Assistant
 
 A simple Flask-based **AI banking chatbot** that uses **Google Gemini** and **prompt chaining** to handle banking-related conversations like account opening, billing issues, and loan inquiries.
 
