@@ -18,7 +18,7 @@ A simple Flask-based **AI banking chatbot** that uses **Google Gemini** and **pr
 ```bash
 git clone https://github.com/yourusername/bank-ai-assistant.git
 cd bank-ai-assistant
-pip install -r requirements.txt
+pip install streamlit
 ```
 
 Create a `.env` file:
@@ -30,16 +30,16 @@ GEMINI_API_KEY=your_google_gemini_api_key
 Run:
 
 ```bash
-python prompt-chain.py
+streamlit run prompt-chain.py
 ```
 
-Then open [http://127.0.0.1:5000/](http://127.0.0.1:5000/).
+Then open [http://localhost:8501/](http://localhost:8501/).
 
 
 
 ## 🧩 Tech Stack
 
-* **Flask**
+* **Streamlit**
 * **Requests**
 * **Dotenv**
 * **Google Gemini API**
