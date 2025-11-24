@@ -3,8 +3,8 @@ import re
 import json
 import requests
 import streamlit as st
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
 class AiAssistant:
     def __init__(self, api_endpoint, api_key):
         self.api_endpoint = api_endpoint
