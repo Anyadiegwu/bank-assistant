@@ -2,42 +2,31 @@ import os
 import re
 import json
 import requests
-from flask import Flask, request, jsonify, render_template_string
+import streamlit as st
 from dotenv import load_dotenv
-
 load_dotenv()
-
-app = Flask(__name__)
-
 class AiAssistant:
-    def __init__(self, api_endpoint, api_key, default_model):
+    def __init__(self, api_endpoint, api_key):
         self.api_endpoint = api_endpoint
         self.api_key = api_key
-        self.default_model = default_model
+        self.session = requests.Session()
+        self.session.headers.update({"Content-Type": "application/json"})
 
-    def call_with_prompt(self, prompt, model=None):
+    def call_with_prompt(self, prompt, temperature=0.3, max_tokens=500):
         url = f"{self.api_endpoint}?key={self.api_key}"
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.3}
-        }
-        headers = {"Content-Type": "application/json"}
-        
+            "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens}
+        }        
         try:
-            response = requests.post(url, headers=headers, json=payload)
+            response = self.session.post(url, json=payload)
             response.raise_for_status()
-            result = response.json()
-            return result['candidates'][0]['content']['parts'][0]['text']
+            return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         except Exception as e:
-            print(f"Error: {e}")
-            return None
+            return f"Error: {e}"
 
-
-gemini_api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
-gemini_api_key = os.getenv('GEMINI_API_KEY')
-gemi = AiAssistant(gemini_api_url, gemini_api_key, "gemini-2.5-flash-lite")
-
-categories = """
+class PromptChainProcessor:
+    CATEGORIES = """
 - Account Opening
 - Billing Issue
 - Account Access
@@ -47,161 +36,166 @@ categories = """
 - Loan Inquiry
 - General Information
 """
-
-
-sessions = {}
-
-@app.route('/')
-def home():
-    html = '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Bank AI Assistant</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-            #chat-box { border: 1px solid #ccc; height: 400px; overflow-y: auto; padding: 15px; margin-bottom: 20px; background: #f9f9f9; }
-            .message { margin: 10px 0; padding: 10px; border-radius: 5px; }
-            .user { background: #007bff; color: white; text-align: right; }
-            .bot { background: #e9ecef; }
-            #user-input { width: 80%; padding: 10px; }
-            #send-btn { width: 18%; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; }
-            #send-btn:hover { background: #0056b3; }
-        </style>
-    </head>
-    <body>
-        <h1>🏦 Bank AI Assistant</h1>
-        <div id="chat-box"></div>
-        <input type="text" id="user-input" placeholder="Type your message..." />
-        <button id="send-btn" onclick="sendMessage()">Send</button>
-
-        <script>
-            let sessionId = Math.random().toString(36).substring(7);
-            
-            window.onload = function() {
-                addBotMessage("Hello! Welcome. I'm your secure AI banking assistant. How can I help you today?");
-            };
-
-            function addBotMessage(message) {
-                const chatBox = document.getElementById('chat-box');
-                chatBox.innerHTML += '<div class="message bot"><strong>Bot:</strong> ' + message + '</div>';
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-
-            function addUserMessage(message) {
-                const chatBox = document.getElementById('chat-box');
-                chatBox.innerHTML += '<div class="message user"><strong>You:</strong> ' + message + '</div>';
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-
-            async function sendMessage() {
-                const input = document.getElementById('user-input');
-                const message = input.value.trim();
-                
-                if (!message) return;
-                
-                addUserMessage(message);
-                input.value = '';
-
-                try {
-                    const response = await fetch('/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: message, session_id: sessionId })
-                    });
-                    
-                    const data = await response.json();
-                    addBotMessage(data.response);
-                } catch (error) {
-                    addBotMessage('Sorry, an error occurred. Please try again.');
-                }
-            }
-
-            document.getElementById('user-input').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') sendMessage();
-            });
-        </script>
-    </body>
-    </html>
-    '''
-    return render_template_string(html)
-
-@app.route('/chat', methods=['POST'])
-def run_prompt_chain():
-    data = request.json
-    user_input = data.get('message', '')
-    session_id = data.get('session_id', 'default')
     
-  
-    if session_id not in sessions:
-        sessions[session_id] = {
-            'context_data': {},
-            'predicted_category': None,
-            'conversation_history': []
-        }
+    def __init__(self, ai_assistant):
+        self.ai = ai_assistant
     
-    session = sessions[session_id]
+    def step1_interpret_intent(self, user_input):
+        prompt = f"""You are a Bank Assistant. Interpret the customer's intent clearly and concisely.
+            Customer message: {user_input}
+            Provide a clear interpretation of what the customer wants or needs. Be specific and professional."""
+        return self.ai.call_with_prompt(prompt)
     
+    def step2_suggest_categories(self, interpreted_message):
+        prompt = f"""Map the query to one or more possible categories that may apply.
+            Available Categories:
+            {self.CATEGORIES}
+
+            Interpreted customer request: 
+            {interpreted_message}
+
+            Return the suggested categories (one or more) that best match this request. Format: list the category names."""
+        return self.ai.call_with_prompt(prompt)
     
-    prompt1 = f"""
-    You are a precise requirements-extraction assistant for a bank.
-    Extract key information from the user's message as a JSON object.
+    def step3_select_category(self, interpreted_message, suggested_categories):
+        prompt = f"""Select the MOST appropriate single category from the suggestions.
+            Suggested Categories:
+            {suggested_categories}
+
+            Interpreted customer request:
+            {interpreted_message}
+
+            Return ONLY the single most appropriate category name, nothing else."""
+        return self.ai.call_with_prompt(prompt)
+
+    def step4_extract_details(self, interpreted_message, user_input, selected_category, context_data):
+        collected_info = json.dumps(context_data, indent=2) if context_data else "None yet"     
+        prompt = f"""You are handling a banking request. Based on the category and information collected so far, determine what's needed next.
+            Selected Category: {selected_category}
+
+            Customer's original message: {user_input}
+
+            Interpreted intent: {interpreted_message}
+
+            Information already collected: 
+            {collected_info}
+
+            Task: 
+            1. If you need more information to process this request, ask ONE specific follow-up question
+            2. If you have enough information, acknowledge this and prepare to resolve the request
+            3. Extract any new details from the customer's message
+
+            Return your response in this JSON format:
+            {{
+                "status": "needs_info" or "ready_to_resolve",
+                "extracted_data": {{"key": "value"}},
+                "follow_up_question": "your question here" or null,
+                "response_to_user": "friendly message to the customer"
+            }}"""
+        return self.ai.call_with_prompt(prompt)
     
-    Current context: {json.dumps(session['context_data'], indent=2)}
-    User message: {user_input}
+    def step5_generate_response(self, selected_category, context_data):
+        collected_info = json.dumps(context_data, indent=2)      
+        prompt = f"""You are a professional banking assistant. Generate a helpful, friendly response to satisfy the customer.
+            Request Category: {selected_category}
+
+            Collected Information:
+            {collected_info}
+
+            Generate a concise, professional response that:
+            1. Confirms what action you're taking or what information you're providing
+            2. Addresses the customer's needs based on the category
+            3. Is warm and reassuring
+            4. Ends with an offer to help further if needed
+
+            Keep it short and natural."""
+        return self.ai.call_with_prompt(prompt)
+
+def run_prompt_chain(customer_query, session_state):
+    user_input = customer_query.strip()
+    if not user_input:
+        return "Please enter a message."
     
-    Output ONLY a JSON object.
-    """
+    if 'interpreted_message' not in session_state:
+        interpreted = session_state.processor.step1_interpret_intent(user_input)
+        session_state.interpreted_message = interpreted
+    else:
+        interpreted = session_state.interpreted_message
+
+    if 'category' not in session_state:
+        suggested_categories = session_state.processor.step2_suggest_categories(interpreted)
+        if not suggested_categories:
+            return "Failed to suggest categories."
+        
+        selected_category = session_state.processor.step3_select_category(interpreted, suggested_categories)
+        if not selected_category:
+            return "Failed to select category."
+        
+        session_state.category = selected_category
+        session_state.context_data = {}
     
-    extracted_detail = gemi.call_with_prompt(prompt1)
-    new_data = {}
-    match = re.search(r'(\{.*\})', extracted_detail, re.DOTALL)
+    if 'history' not in session_state:
+        session_state.history = []
+
+    session_state.history.append(user_input)
+    full_history = "\n".join(session_state.history)
+
+    extraction_result = session_state.processor.step4_extract_details(
+        interpreted,
+        full_history,
+        session_state.category,
+        session_state.context_data
+    )
+    
+    if not extraction_result:
+        return "Failed to process request."
+    
+    match = re.search(r'\{.*\}', extraction_result, re.DOTALL)
     if match:
         try:
-            new_data = json.loads(match.group())
-            for key, value in new_data.items():
-                if value:
-                    session['context_data'][key] = value
+            response_data = json.loads(match.group())
+            
+            if 'extracted_data' in response_data and response_data['extracted_data']:
+                session_state.context_data.update(response_data['extracted_data'])
+            
+            if response_data.get('status') == 'ready_to_resolve':
+                final_response = session_state.processor.step5_generate_response(
+                    session_state.category,
+                    session_state.context_data
+                )
+                return final_response if final_response else response_data.get('response_to_user', 'Your request has been processed.')
+            else:
+                return response_data.get('response_to_user', 'Could you provide more details?')
         except:
-            pass
+            return extraction_result
     
- 
-    if session['predicted_category'] is None:
-        prompt2 = f"""
-        Classify this banking request into one category:
-        {categories}
-        
-        User message: {user_input}
-        Return ONLY the category name.
-        """
-        session['predicted_category'] = gemi.call_with_prompt(prompt2).strip()
-    
- 
-    prompt3 = f"""
-    You are a banking conversation controller.
-    
-    Category: {session['predicted_category']}
-    Collected info: {json.dumps(session['context_data'], indent=2)}
-    User message: {user_input}
-    
-    Required for Account Opening: full_name, date_of_birth, address, account_type
-    
-    - Do NOT ask for information already collected
-    - Ask for ONE missing field at a time
-    - If all info collected, say "All information collected. Routing to handler."
-    
-    Already collected: {', '.join(session['context_data'].keys())}
-    """
-    
-    controller_response = gemi.call_with_prompt(prompt3)
-    
-    session['conversation_history'].append({
-        'user_input': user_input,
-        'response': controller_response
-    })
-    
-    return jsonify({'response': controller_response})
+    return extraction_result
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+st.title("🏦 Bank AI Assistant")
+
+if 'messages' not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hello! Welcome. I'm your secure AI banking assistant. How can I help you today?"}
+    ]
+    gemini_api_key = os.getenv('GEMINI_API_KEY')
+    
+    api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+    st.session_state.ai_assistant = AiAssistant(api_url, gemini_api_key)
+    st.session_state.processor = PromptChainProcessor(st.session_state.ai_assistant)
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("How can I help you today?"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        with st.spinner("Typing..."):
+            response = run_prompt_chain(prompt, st.session_state)
+            st.markdown(response)
+    
+    st.session_state.messages.append({"role": "assistant", "content": response})
+    st.rerun()
