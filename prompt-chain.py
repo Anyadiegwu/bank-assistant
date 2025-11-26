@@ -2,9 +2,9 @@ import os
 import re
 import json
 import requests
-import streamlit as st
-# from dotenv import load_dotenv
-# load_dotenv()
+from dotenv import load_dotenv
+
+load_dotenv()
 class AiAssistant:
     def __init__(self, api_endpoint, api_key):
         self.api_endpoint = api_endpoint
@@ -12,18 +12,34 @@ class AiAssistant:
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
 
-    def call_with_prompt(self, prompt, temperature=0.3, max_tokens=500):
+    def call_with_prompt(self, prompt):
         url = f"{self.api_endpoint}?key={self.api_key}"
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens}
-        }        
+            "generationConfig": {"temperature": 0.3}
+        }
         try:
             response = self.session.post(url, json=payload)
             response.raise_for_status()
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         except Exception as e:
             return f"Error: {e}"
+
+class SessionState:
+    def __init__(self):
+        self.data = {}
+    
+    def __contains__(self, key):
+        return key in self.data
+    
+    def __getattr__(self, key):
+        return self.data.get(key)
+    
+    def __setattr__(self, key, value):
+        if key == 'data':
+            super().__setattr__(key, value)
+        else:
+            self.data[key] = value
 
 class PromptChainProcessor:
     CATEGORIES = """
@@ -59,6 +75,7 @@ class PromptChainProcessor:
     
     def step3_select_category(self, interpreted_message, suggested_categories):
         prompt = f"""Select the MOST appropriate single category from the suggestions.
+
             Suggested Categories:
             {suggested_categories}
 
@@ -67,10 +84,11 @@ class PromptChainProcessor:
 
             Return ONLY the single most appropriate category name, nothing else."""
         return self.ai.call_with_prompt(prompt)
-
+    
     def step4_extract_details(self, interpreted_message, user_input, selected_category, context_data):
         collected_info = json.dumps(context_data, indent=2) if context_data else "None yet"     
         prompt = f"""You are handling a banking request. Based on the category and information collected so far, determine what's needed next.
+
             Selected Category: {selected_category}
 
             Customer's original message: {user_input}
@@ -95,8 +113,9 @@ class PromptChainProcessor:
         return self.ai.call_with_prompt(prompt)
     
     def step5_generate_response(self, selected_category, context_data):
-        collected_info = json.dumps(context_data, indent=2)      
+        collected_info = json.dumps(context_data, indent=2)     
         prompt = f"""You are a professional banking assistant. Generate a helpful, friendly response to satisfy the customer.
+
             Request Category: {selected_category}
 
             Collected Information:
@@ -116,17 +135,19 @@ def run_prompt_chain(customer_query, session_state):
     if not user_input:
         return "Please enter a message."
     
+    if 'history' not in session_state:
+        session_state.history = []
+    session_state.history.append(user_input)   
+    full_history = "\n".join(session_state.history)
+    
     if 'interpreted_message' not in session_state:
         interpreted = session_state.processor.step1_interpret_intent(user_input)
         session_state.interpreted_message = interpreted
     else:
         interpreted = session_state.interpreted_message
-
+    
     if 'category' not in session_state:
-        suggested_categories = session_state.processor.step2_suggest_categories(interpreted)
-        if not suggested_categories:
-            return "Failed to suggest categories."
-        
+        suggested_categories = session_state.processor.step2_suggest_categories(interpreted)  
         selected_category = session_state.processor.step3_select_category(interpreted, suggested_categories)
         if not selected_category:
             return "Failed to select category."
@@ -134,27 +155,19 @@ def run_prompt_chain(customer_query, session_state):
         session_state.category = selected_category
         session_state.context_data = {}
     
-    if 'history' not in session_state:
-        session_state.history = []
-
-    session_state.history.append(user_input)
-    full_history = "\n".join(session_state.history)
-
     extraction_result = session_state.processor.step4_extract_details(
         interpreted,
-        full_history,
+        full_history,  
         session_state.category,
         session_state.context_data
-    )
-    
+    )   
     if not extraction_result:
         return "Failed to process request."
     
     match = re.search(r'\{.*\}', extraction_result, re.DOTALL)
     if match:
         try:
-            response_data = json.loads(match.group())
-            
+            response_data = json.loads(match.group())         
             if 'extracted_data' in response_data and response_data['extracted_data']:
                 session_state.context_data.update(response_data['extracted_data'])
             
@@ -167,35 +180,38 @@ def run_prompt_chain(customer_query, session_state):
             else:
                 return response_data.get('response_to_user', 'Could you provide more details?')
         except:
-            return extraction_result
-    
+            return extraction_result  
     return extraction_result
 
-st.title("🏦 Bank AI Assistant")
-
-if 'messages' not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! Welcome. I'm your secure AI banking assistant. How can I help you today?"}
-    ]
+def initialize_session():
     gemini_api_key = os.getenv('GEMINI_API_KEY')
-    
     api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
-    st.session_state.ai_assistant = AiAssistant(api_url, gemini_api_key)
-    st.session_state.processor = PromptChainProcessor(st.session_state.ai_assistant)
-
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-if prompt := st.chat_input("How can I help you today?"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
     
-    with st.chat_message("assistant"):
-        with st.spinner("Typing..."):
-            response = run_prompt_chain(prompt, st.session_state)
-            st.markdown(response)
+    session_state = SessionState()
+    session_state.ai_assistant = AiAssistant(api_url, gemini_api_key)
+    session_state.processor = PromptChainProcessor(session_state.ai_assistant)
+    session_state.messages = [
+        {"role": "assistant", "content": "Hello! Welcome. I'm your secure AI banking assistant. How can I help you today?"}
+    ]   
+    return session_state
+
+if __name__ == '__main__':
+    session = initialize_session()  
+    print(session.messages[0]["content"])
+    print()
     
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    st.rerun()
+    while True:
+        user_input = input("You: ").strip()     
+        if not user_input:
+            continue
+        
+        if user_input.lower() in ['exit', 'quit', 'bye']:
+            print("Assistant: Thank you for using our banking service. Goodbye!")
+            break
+        
+        session.messages.append({"role": "user", "content": user_input})
+        response = run_prompt_chain(user_input, session)
+        session.messages.append({"role": "assistant", "content": response})
+        
+        print(f"Assistant: {response}")
+        print()
