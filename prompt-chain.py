@@ -130,30 +130,52 @@ class PromptChainProcessor:
             Keep it short and natural."""
         return self.ai.call_with_prompt(prompt)
 
-def run_prompt_chain(customer_query, session_state):
+def run_prompt_chain(customer_query, session_state=None):
     user_input = customer_query.strip()
     if not user_input:
-        return "Please enter a message."
+        return ["Error: Empty input", None, None, None, None]
+    
+    if session_state is None:
+        session_state = SessionState()
+        gemini_api_key = os.getenv('GEMINI_API_KEY')
+        api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+        session_state.ai_assistant = AiAssistant(api_url, gemini_api_key)
+        session_state.processor = PromptChainProcessor(session_state.ai_assistant)
     
     if 'history' not in session_state:
         session_state.history = []
     session_state.history.append(user_input)   
     full_history = "\n".join(session_state.history)
     
+    intermediate_outputs = []
+    
     if 'interpreted_message' not in session_state:
         interpreted = session_state.processor.step1_interpret_intent(user_input)
         session_state.interpreted_message = interpreted
     else:
         interpreted = session_state.interpreted_message
+    intermediate_outputs.append(interpreted)
+    
+    if 'suggested_categories' not in session_state:
+        suggested_categories = session_state.processor.step2_suggest_categories(interpreted)
+        session_state.suggested_categories = suggested_categories
+    else:
+        suggested_categories = session_state.suggested_categories
+    intermediate_outputs.append(suggested_categories)
     
     if 'category' not in session_state:
-        suggested_categories = session_state.processor.step2_suggest_categories(interpreted)  
         selected_category = session_state.processor.step3_select_category(interpreted, suggested_categories)
         if not selected_category:
-            return "Failed to select category."
+            intermediate_outputs.append("Error: Failed to select category")
+            intermediate_outputs.append(None)
+            intermediate_outputs.append(None)
+            return intermediate_outputs
         
         session_state.category = selected_category
         session_state.context_data = {}
+    else:
+        selected_category = session_state.category
+    intermediate_outputs.append(selected_category)
     
     extraction_result = session_state.processor.step4_extract_details(
         interpreted,
@@ -162,9 +184,15 @@ def run_prompt_chain(customer_query, session_state):
         session_state.context_data
     )   
     if not extraction_result:
-        return "Failed to process request."
+        intermediate_outputs.append("Error: Failed to process request")
+        intermediate_outputs.append(None)
+        return intermediate_outputs
+    
+    intermediate_outputs.append(extraction_result)
     
     match = re.search(r'\{.*\}', extraction_result, re.DOTALL)
+    final_response = None
+    
     if match:
         try:
             response_data = json.loads(match.group())         
@@ -176,12 +204,18 @@ def run_prompt_chain(customer_query, session_state):
                     session_state.category,
                     session_state.context_data
                 )
-                return final_response if final_response else response_data.get('response_to_user', 'Your request has been processed.')
+                if not final_response:
+                    final_response = response_data.get('response_to_user', 'Your request has been processed.')
             else:
-                return response_data.get('response_to_user', 'Could you provide more details?')
+                final_response = response_data.get('response_to_user', 'Could you provide more details?')
         except:
-            return extraction_result  
-    return extraction_result
+            final_response = extraction_result
+    else:
+        final_response = extraction_result
+    
+    intermediate_outputs.append(final_response)
+    
+    return intermediate_outputs
 
 def initialize_session():
     gemini_api_key = os.getenv('GEMINI_API_KEY')
@@ -210,8 +244,20 @@ if __name__ == '__main__':
             break
         
         session.messages.append({"role": "user", "content": user_input})
-        response = run_prompt_chain(user_input, session)
-        session.messages.append({"role": "assistant", "content": response})
         
-        print(f"Assistant: {response}")
+        intermediate_outputs = run_prompt_chain(user_input, session)
+        
+        final_response = intermediate_outputs[-1] if intermediate_outputs else "Error processing request"
+        
+        session.messages.append({"role": "assistant", "content": final_response})
+        
+        print(f"\n--- Intermediate Outputs ---")
+        print(f"Stage 1 (Intent): {intermediate_outputs[0]}")
+        print(f"Stage 2 (Categories): {intermediate_outputs[1]}")
+        print(f"Stage 3 (Selected): {intermediate_outputs[2]}")
+        print(f"Stage 4 (Extraction): {intermediate_outputs[3][:100]}..." if len(str(intermediate_outputs[3])) > 100 else f"Stage 4 (Extraction): {intermediate_outputs[3]}")
+        print(f"Stage 5 (Final): {intermediate_outputs[4]}")
+        print("----------------------------\n")
+        
+        print(f"Assistant: {final_response}")
         print()
