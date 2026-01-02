@@ -16,7 +16,7 @@ A simple Flask-based **AI banking chatbot** that uses **Google Gemini** and **pr
 ## ⚙️ Setup
 
 ```bash
-git clone https://github.com/yourusername/bank-ai-assistant.git
+git clone https://github.com/anyadiegwu/bank-ai-assistant.git
 cd bank-ai-assistant
 pip install streamlit
 ```
